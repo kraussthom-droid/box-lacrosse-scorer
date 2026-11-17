@@ -78,7 +78,33 @@ $('swapTeams').onclick=()=>{const hn=$('homeName').value,hc=$('homeColor').value
 
 $('newGame').onclick=async()=>{const home=$('homeName').value.trim()||'Home',away=$('awayName').value.trim()||'Away';const hg=$('homeGoalie').value.trim(),ag=$('awayGoalie').value.trim(),hc=$('homeCaptain').value.trim(),ac=$('awayCaptain').value.trim();if(!validJersey(hg)||!validJersey(ag)||!validJersey(hc,true)||!validJersey(ac,true)){alert('Enter starting goalie jersey numbers for both teams; captains may be blank.');return}const g={id:uuid(),date:$('gameDate').value||new Date().toISOString().slice(0,10),scheduledStart:$('scheduledStart').value,actualStart:$('actualStart').value,home:{name:home,color:$('homeColor').value,goalie:hg,captain:hc},away:{name:away,color:$('awayColor').value,goalie:ag,captain:ac},quarter:1,status:'in_progress',verifiedHome:null,verifiedAway:null,audit:[],events:[],metaDirty:true,version:1};gameAttendance(g,0);gameAttendance(g,1);state.games.push(g);state.activeId=g.id;await commit();show('score')};
 $('gameHistory').onclick=async ev=>{const b=ev.target.closest('button[data-open]');if(!b)return;state.activeId=b.dataset.open;await commit();show('score')};
-$('refreshRosters').onclick=async()=>{await sync(true);render();if(active())renderRosters()};$('saveSync').onclick=async()=>{state.syncUrl=$('syncUrl').value.trim();state.syncKey=$('syncKey').value.trim();await persist();$('notice').textContent='Sync settings saved locally (not yet verified)';status()};$('syncNow').onclick=async()=>{await sync(true)};
+// Dedicated roster-only refresh. Unlike ordinary sync, it always asks for the master roster
+// and never silently treats an absent masterRosters response as an empty download.
+async function refreshMasterRosters(){
+  const notice=$('notice'), button=$('refreshRosters');
+  if(syncing){notice.textContent='Another sync is still running. Wait for it to finish, then press Refresh rosters again.';return}
+  if(!navigator.onLine){notice.textContent='Roster refresh failed: iPad is offline.';return}
+  if(!state.syncUrl||!state.syncKey){notice.textContent='Roster refresh failed: save the Apps Script URL and sync key first.';return}
+  const g=active()||state.games[0];
+  if(!g){notice.textContent='Roster refresh requires at least one saved game with the current Apps Script backend.';return}
+  syncing=true;button.disabled=true;notice.textContent='Refreshing rosters… requesting master roster from Google Sheets.';
+  try{
+    const payload={key:state.syncKey,game:{id:g.id,date:g.date,home:g.home,away:g.away,quarter:g.quarter,status:g.status||'in_progress',verifiedHome:g.verifiedHome,verifiedAway:g.verifiedAway,finalizedAt:g.finalizedAt||'',audit:g.audit||[],scheduledStart:g.scheduledStart||'',actualStart:g.actualStart||''},events:[],rosterUpdates:[],attendance:{},includeRosters:true};
+    const response=await fetch(state.syncUrl,{method:'POST',headers:{'Content-Type':'text/plain;charset=utf-8'},body:JSON.stringify(payload),redirect:'follow'});
+    if(!response.ok)throw Error('HTTP '+response.status);
+    const result=await response.json();
+    if(!result.ok)throw Error(result.error||'Server rejected the refresh');
+    if(!Array.isArray(result.masterRosters))throw Error('Server did not return masterRosters. Check that the deployed Code.gs includes readMasterRosters_ and includeRosters support.');
+    if(result.masterRosters.length===0)throw Error('Server returned an empty master roster; no local records were changed.');
+    const counts=mergeServerRosters(result.masterRosters);
+    await persist();
+    render();if(active())renderRosters();
+    const test=(state.rosters.thunder||[]).find(r=>r.id==='60938899-55f4-4154-9fa0-d4e0f5838ed8');
+    notice.textContent='Roster refresh complete: '+counts.received+' received, '+counts.updated+' updated, '+counts.added+' added.'+(test?' Thunder #99: '+test.name+'.':'');
+  }catch(e){notice.textContent='Roster refresh FAILED: '+e.message}
+  finally{syncing=false;button.disabled=false;status()}
+}
+$('refreshRosters').onclick=refreshMasterRosters;$('saveSync').onclick=async()=>{state.syncUrl=$('syncUrl').value.trim();state.syncKey=$('syncKey').value.trim();await persist();$('notice').textContent='Sync settings saved locally (not yet verified)';status()};$('syncNow').onclick=async()=>{await sync(true)};
 $('clearTestGames').onclick=async()=>{if(syncing){alert('A sync is currently running. Wait until it finishes, then try again.');return}if(!confirm('Delete ALL games and pending uploads stored on this iPad? This cannot be undone. Your Google Sheets data will NOT be deleted.'))return;const typed=prompt('Type CLEAR to confirm deleting every local game:');if(typed!=='CLEAR'){if(typed!==null)alert('Reset canceled.');return}const button=$('clearTestGames');button.disabled=true;try{state.games=[];state.activeId=null;state.lastSyncAt=null;await persist();render();show('setup');$('resetNotice').textContent='Local games and pending uploads cleared. Google Sheets sync settings preserved.';$('notice').textContent='Local test history cleared; Google Sheets was not modified.'}catch(e){alert('Reset failed: '+e.message+'. Do not clear Safari data.')}finally{button.disabled=false}};
 $('exportBtn').onclick=()=>{const blob=new Blob([JSON.stringify({exportedAt:new Date().toISOString(),games:state.games},null,2)],{type:'application/json'}),url=URL.createObjectURL(blob),a=document.createElement('a');a.href=url;a.download='lacrosse-backup-'+new Date().toISOString().slice(0,10)+'.json';a.click();setTimeout(()=>URL.revokeObjectURL(url),3000)};
 window.addEventListener('online',()=>{status();sync()});window.addEventListener('offline',status);document.addEventListener('visibilitychange',()=>{if(!document.hidden)sync()});
