@@ -1,7 +1,14 @@
-/* V12.6 compact NLL-inspired report. Read-only; shared IndexedDB with scorer. */
+/* V16 compact NLL-inspired report. Read-only; shared IndexedDB with scorer. */
 const esc=v=>String(v??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const events=g=>(g.events||[]).filter(e=>!e.deleted);
 const name=(g,t)=>t===0?g.home.name:g.away.name;
+const displayGameDateTime=(date,time)=>{
+ const d=/^(\d{4})-(\d{2})-(\d{2})$/.exec(String(date||''));
+ const dateText=d?new Date(Date.UTC(+d[1],+d[2]-1,+d[3])).toLocaleDateString('en-US',{timeZone:'UTC',month:'long',day:'numeric',year:'numeric'}):String(date||'Date not recorded');
+ const t=/^(\d{1,2}):(\d{2})(?::\d{2})?$/.exec(String(time||''));
+ const timeText=t?`${(+t[1]%12)||12}:${t[2]} ${+t[1]>=12?'PM':'AM'}`:String(time||'Time not recorded');
+ return `${dateText} · ${timeText}`;
+};
 // Soccer-style minute: use the stored scoring minute when seconds were entered;
 // otherwise display the exact whole elapsed minute, without invented seconds.
 const elapsed=e=>{const n=Number(e.elapsed);let seconds=Number.isFinite(n)&&e.elapsed!=null?n:null;if(seconds===null){const m=/^(\d+):(\d{2}|--)$/.exec(String(e.remaining||''));if(!m)return '—';seconds=720-(Number(m[1])*60+(m[2]==='--'?0:Number(m[2])))}const minute=e.secondsKnown===false||String(e.remaining||'').endsWith(':--')?Math.floor(seconds/60):Math.ceil(seconds/60);return `${Math.max(0,minute)}′`};
@@ -34,8 +41,7 @@ function playerRows(data,g,ev,t){
 }
 function goalieRows(data,g,ev,t){const rs=roster(data,g,t),att=g.attendance?.[teamKey(g,t)]||g.attendance?.[(t===0?g.home:g.away).id]||{};const m=new Map();const ensure=n=>{n=String(n??'').trim();if(!n)return null;if(!m.has(n))m.set(n,{n,s:[0,0,0,0],ga:0});return m.get(n)};for(const r of rs)if(r.goalie&&att[r.id]!==false)ensure(r.jersey);ensure((t===0?g.home:g.away).goalie);for(const e of ev){if(e.type==='goalie_change'&&e.team===t)ensure(e.goalie);if(e.type==='save'&&e.team===t){const x=ensure(e.goalie);if(x&&e.quarter>=1&&e.quarter<=4)x.s[e.quarter-1]++}if(e.type==='goal'&&e.team===1-t){const x=ensure(e.goalieAgainst);if(x)x.ga++}}return [...m.values()].map(x=>{const sv=x.s.reduce((a,b)=>a+b,0),r=rs.find(r=>String(r.jersey)===x.n);return [x.n,properName(r?.name||''),...x.s,sv,x.ga,sv+x.ga?(100*sv/(sv+x.ga)).toFixed(1)+'%':'—']})}
 function build(data,g){const ev=events(g),goals=ordered(ev.filter(e=>e.type==='goal')),pen=ordered(ev.filter(e=>e.type==='penalty'));const totals=[0,1].map(t=>count(ev,'goal',t));const short=t=>abbrev(g,t);let running=[0,0];const scoreRows=goals.map(e=>{running[e.team]++;return [e.quarter,elapsed(e),short(e.team),jersey(e.scorer),e.assist?jersey(e.assist):'—',running[0]+'–'+running[1]]});const penRows=pen.map(e=>[e.quarter,elapsed(e),short(e.team),jersey(e.player),e.infraction||'Other',Number(e.duration)||1]);const quarterRows=[0,1].map(t=>[name(g,t),...[1,2,3,4].map(q=>count(ev,'goal',t,q)),totals[t]]);const refs=(g.referees||[]).filter(Boolean);const status=g.status==='final'?'FINAL':'LIVE / UNOFFICIAL';document.title=`716 Lacrosse — ${name(g,0)} vs ${name(g,1)} — ${g.date||''}`;document.getElementById('report').innerHTML=`
-<div class="mast"><img src="716-lacrosse-logo.png" alt="716 Lacrosse"/><div class="identity"><h1>716 LACROSSE</h1><b>GAME SHEET</b><div>${esc(g.date||'Date not recorded')} · ${esc(g.scheduledStart||'Time not recorded')}</div><div>${esc(name(g,0))} ${totals[0]} — ${totals[1]} ${esc(name(g,1))}</div></div><div class="details"><b>OFFICIALS</b><div>${refs.length?refs.map(esc).join(' · '):'Not recorded'}</div><b>DETAILS</b><div>${esc(status)}</div><div>Game ID: ${esc(g.id)}</div></div></div>
-<section><h2>SCORING BY QUARTER</h2>${tbl(['TEAM','Q1','Q2','Q3','Q4','TOTAL'],quarterRows)}</section>
+<div class="mast"><img src="716-lacrosse-logo.png" alt="716 Lacrosse"/><div class="identity"><h1>716 LACROSSE</h1><b>GAME SHEET</b><div>${esc(displayGameDateTime(g.date,g.scheduledStart))}</div><div class="matchscore">${esc(name(g,0))} <strong>${totals[0]} — ${totals[1]}</strong> ${esc(name(g,1))}</div></div><div class="details"><b>OFFICIALS</b><div>${refs.length?refs.map(esc).join(' · '):'Not recorded'}</div><b>STATUS</b><div>${esc(status)}</div></div><section class="quarter-box"><h2>QUARTER SCORING</h2>${tbl(['TEAM','1','2','3','4','TOT'],quarterRows)}</section></div>
 <div class="columns summaries"><section><h2>SCORING SUMMARY</h2>${tbl(['Q','TIME','TEAM','SCORED BY','ASSIST','H–A'],scoreRows)}</section><section><h2>PENALTY SUMMARY</h2>${tbl(['Q','TIME','TEAM','PLAYER','OFFENCE','MIN'],penRows)}<div class="small right">Penalties: ${pen.length} · Minutes: ${pen.reduce((n,e)=>n+(Number(e.duration)||1),0)}</div></section></div>
 <div class="columns rosters">${[0,1].map(t=>`<section><h2>${esc(name(g,t).toUpperCase())} ROSTER</h2>${tbl(['#','NAME','G','A','PTS','PIM'],playerRows(data,g,ev,t))}</section>`).join('')}</div>
 <div class="columns goalies">${[0,1].map(t=>`<section><h2>${esc(name(g,t).toUpperCase())} GOALIES</h2>${tbl(['#','NAME','SV1','SV2','SV3','SV4','SV','GA','SV%'],goalieRows(data,g,ev,t))}</section>`).join('')}</div>
